@@ -1,0 +1,18 @@
+# The company's access rules. A different company = a different file.
+email_domain: example.test
+
+# Everything the agent is allowed to govern. Access is checked for each item:
+# a person must be a member of exactly the items their role allows.
+inventory:
+  channels: [design, engineering, finance, hr-private]
+  repos: [ui-kit, backend, finance-reports]
+
+roles:
+  designer:  {channels: [design],      repos: [ui-kit]}
+  developer: {channels: [engineering], repos: [backend, ui-kit]}
+  intern:    {channels: [engineering], repos: []}
+
+# Extra access to these needs a human's approval.
+sensitive:
+  channels: [finance, hr-private]
+  repos: [finance-reports]

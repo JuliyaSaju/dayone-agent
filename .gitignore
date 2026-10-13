@@ -1,0 +1,22 @@
+# Secrets and environment variables (DO NOT COMMIT)
+.env
+*.env.local
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# SQLite local databases
+*.db
+*.sqlite3
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Reports output (preserve directory structure via .gitkeep)
+reports/*.json
+!reports/.gitkeep

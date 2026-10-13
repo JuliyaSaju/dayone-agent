@@ -1,0 +1,23 @@
+# Two real apps on your own computer. Synthetic data only.
+services:
+  gitea:
+    image: gitea/gitea:1.22
+    container_name: dayone-gitea
+    environment:
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__server__ROOT_URL=http://localhost:3000/
+      - GITEA__database__DB_TYPE=sqlite3
+    ports:
+      - "3000:3000"
+    volumes:
+      - gitea-data:/data
+
+  mattermost:
+    # Mattermost's all-in-one image for testing (has its own built-in database).
+    image: mattermost/mattermost-preview
+    container_name: dayone-mattermost
+    ports:
+      - "8065:8065"
+
+volumes:
+  gitea-data:
