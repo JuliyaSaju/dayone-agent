@@ -158,7 +158,6 @@ To understand or review the implementation, explore the code in this recommended
 | **7** | [`tools/registry.py`](file:///tools/registry.py) | Tool schemas exposed to the LLM with strict argument typing. |
 | **8** | [`agent/llm.py`](file:///agent/llm.py) | Multi-provider LLM adapter supporting Gemini, OpenAI, Claude, and local mock backends. |
 | **9** | [`scripts/evaluate.py`](file:///scripts/evaluate.py) | Comprehensive 8-scenario benchmark test harness. |
-| **10** | [`DECISIONS.md`](file:///DECISIONS.md) | **Engineering diary & audit log** recording technical trade-offs, bug fixes, and interview drill notes. |
 
 ---
 
@@ -262,11 +261,6 @@ python -m scripts.evaluate
 5. **Zero-Trust Independent Verification:**
    - LLMs notoriously produce "sycophantic" responses, reporting success even on failure.
    - The verifier bypasses LLM outputs entirely, querying raw REST endpoints and testing credential authentication directly.
-
----
-
-## 📝 Engineering Log (`DECISIONS.md`)
-For a comprehensive record of all architectural decisions, real-world bug fixes (such as debugging Gemini `thought_signature` protocol compatibility), and interview preparation drills, refer to [DECISIONS.md](file:///DECISIONS.md).
 
 ---
 

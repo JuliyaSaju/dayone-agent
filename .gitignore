@@ -2,6 +2,9 @@
 .env
 *.env.local
 
+# Internal developer diaries / notes
+DECISIONS.md
+
 # Virtual environments
 venv/
 .venv/
