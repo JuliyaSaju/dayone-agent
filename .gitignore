@@ -4,6 +4,8 @@
 
 # Internal developer diaries / notes
 DECISIONS.md
+interview_answers.html
+*.pdf
 
 # Virtual environments
 venv/
