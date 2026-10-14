@@ -1,264 +1,240 @@
-<div style="font-family: 'Times New Roman', Times, serif; font-size: 16px; line-height: 1.7; color: #1a1a1a; max-width: 900px; margin: 0 auto; padding: 20px;">
+# Day-One Agent: Autonomous IT Onboarding with Ground-Truth Verification
 
-<h1 align="center" style="font-size: 28px; font-weight: normal; margin-bottom: 6px; letter-spacing: 0.5px;">
-  Day-One Agent: Autonomous IT Onboarding with Ground-Truth Verification
-</h1>
+**A policy-gated, independently verified autonomous agent for employee provisioning across Mattermost and Gitea.**
 
-<p align="center" style="font-size: 15px; color: #555; margin-top: 0; margin-bottom: 25px; font-style: italic;">
-  A reliable, zero-trust autonomous agent for employee provisioning across Mattermost and Gitea
-</p>
+---
 
-<hr style="border: none; border-top: 1px solid #ccc; margin: 20px 0;">
+## Table of Contents
 
-<h2>1. Project Overview</h2>
+1. [Project Overview](#1-project-overview)
+2. [Design Principles](#2-design-principles)
+3. [Architecture](#3-architecture)
+4. [Implementation Workflow](#4-implementation-workflow)
+5. [Evaluation and Results](#5-evaluation-and-results)
+6. [Repository Structure](#6-repository-structure)
+7. [Setup and Usage](#7-setup-and-usage)
+8. [Technologies and Tools](#8-technologies-and-tools)
+9. [Key Design Decisions](#9-key-design-decisions)
+10. [Assumptions](#10-assumptions)
+11. [Known Limitations](#11-known-limitations)
 
-<p>
-This project is an autonomous AI agent system designed to handle employee onboarding and offboarding operations across real enterprise applications. Instead of an IT administrator manually navigating through multiple administrative consoles to create users, assign team channels, and provision repository permissions, the administrator provides a single natural language instruction:
-</p>
+---
 
-<blockquote style="background: #f9f9f9; border-left: 4px solid #333; margin: 15px 0; padding: 10px 18px; font-style: italic;">
-  "Priya Sharma joins Monday as a designer"<br>
-  "Rahul Verma left today"
-</blockquote>
+## 1. Project Overview
 
-<p>
-From this input, the agent extracts the user intent, consults organizational policy rules, invokes the appropriate REST APIs across Mattermost and Gitea, safely handles potential network dropouts, and runs an independent verification suite against the live services.
-</p>
+This project is an autonomous AI agent that onboards and offboards employees across real applications. Instead of navigating several admin consoles, an administrator gives one sentence:
 
-<hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+> "Priya Sharma joins Monday as a designer"
+> "Rahul Verma left today"
 
-<h2>2. Core Motivation and Problem Statement</h2>
+The agent extracts the intent, applies the company's access rules, calls the REST APIs of **Mattermost** (team chat) and **Gitea** (code hosting), recovers from network failures without creating duplicates, and then verifies the result against the live services. The final status always comes from that independent verification, never from the model's own completion message.
 
-<p>
-When building autonomous agents powered by large language models, the most dangerous failure mode is <b>unverified self-reporting</b>. A standard LLM will frequently report that an operation was successful even if an underlying API call dropped the connection, timed out, or returned an unparsed error. In access control, this causes severe silent failures: employees missing critical channels, orphan accounts, or unintended privilege escalation.
-</p>
+| Assessment criterion | How it is addressed |
+|---|---|
+| Autonomy | The model turns one sentence into tool calls and adapts, for example when a username is taken |
+| Execution | Real accounts, channel memberships and repository permissions are created or removed |
+| Reliability | Bounded retries, idempotent tools, injected-fault tests, an audit log written before each action |
+| Verification | An AI-free verifier proves what the person has and what they do not have |
+| Generalization | A new company or role is a change to `config/roles.yaml`, not to the code |
+| Engineering quality | Small single-purpose modules, typed models, 14 unit tests, a live benchmark, no agent framework |
 
-<p>
-Furthermore, relying on language models for security decisions exposes the company to prompt injection attacks, where a malicious instruction could coerce the agent into granting administrator privileges.
-</p>
+---
 
-<p>
-To solve these challenges, I built this system on three fundamental engineering principles:
-</p>
+## 2. Design Principles
 
-<ol>
-  <li><b>Separation of Reasoning and Policy:</b> The language model is strictly used to parse conversational input and select appropriate tools. Company access policies are hard-coded in deterministic Python logic, meaning the model is mathematically incapable of granting unauthorized permissions regardless of user phrasing.</li>
-  <li><b>Human-in-the-Loop Safeguards:</b> High-risk operations—specifically account deactivations during offboarding and requests for sensitive resources (such as finance access)—pause execution and require explicit interactive confirmation from a human supervisor.</li>
-  <li><b>Zero-AI Ground-Truth Verification:</b> After the agent finishes its work, an independent verification engine queries the real application APIs directly. The agent's final status is determined solely by verified ground truth, never by the AI model's own completion text.</li>
-</ol>
+LLM agents often report success even when an API call timed out or failed. In access control this causes silent failures: missing channels, orphaned accounts, or unintended privilege escalation. Text in a request can also try to manipulate the agent (prompt injection). The system therefore rests on three principles:
 
-<hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+1. **Separation of reasoning and policy.** The model only parses the request and chooses tools. Access rules live in `config/roles.yaml` and are enforced by deterministic Python. Every tool call passes a policy gate, and no tool exists that can grant administrator rights.
+2. **Human-in-the-loop safeguards.** Offboarding and requests for sensitive resources (such as the finance channel) pause for explicit human approval. Missing essential information, such as an unstated role, makes the agent ask instead of guess.
+3. **Ground-truth verification without AI.** An independent verifier queries the real APIs and compares the actual state with the correct state computed from the rules.
 
-<h2>3. End-to-End Implementation Workflow</h2>
+---
 
-<p>
-The project was constructed methodically in eight interconnected stages:
-</p>
+## 3. Architecture
 
-<h3>Phase 1: Local Application Infrastructure</h3>
-<p>
-To ensure the agent works against production-grade services rather than artificial mocks, I deployed containerized instances of <b>Mattermost</b> (team messaging on port 8065) and <b>Gitea</b> (git hosting on port 3000) using Docker Compose. All network communications occur via authenticated HTTP REST protocols.
-</p>
+```mermaid
+flowchart TD
+    A["Manager's sentence"] --> B["LLM: extract structured intent"]
+    B --> C{"Policy checks"}
+    C -- "missing information" --> H1["Ask the human"]
+    C -- "sensitive access or offboarding" --> H2["Human approval"]
+    C --> D["Expected end state from roles.yaml"]
+    H1 --> D
+    H2 --> D
+    D --> E["Agent loop: LLM chooses the next tool"]
+    E --> F["Policy gate"]
+    F --> G["Executor: retries, fault injection, audit log"]
+    G --> I["Mattermost and Gitea (real apps)"]
+    I --> E
+    E --> V["Independent verifier (no AI)"]
+    V --> R["Report and evidence"]
+```
 
-<h3>Phase 2: Declarative Policy Specifications</h3>
-<p>
-I created a declarative configuration file in <code>config/roles.yaml</code> specifying the exact resources permitted for each role. For example, a designer is authorized only for the Mattermost <code>design</code> channel and the Gitea <code>ui-kit</code> repository. All other departments (engineering, finance, hr-private) are prohibited by default under the principle of least privilege.
-</p>
+**Flow:** Understand, Check, Approve, Plan, Execute, Observe, Adapt, Verify, Report.
 
-<h3>Phase 3: Application Client Integrations</h3>
-<p>
-In <code>tools/apps.py</code>, I implemented concrete REST client interfaces for both platforms. Sensitive administrative tokens and credentials are kept strictly in a local <code>.env</code> file excluded from source control, with a clean template provided in <code>.env.example</code>.
-</p>
+| Final status | Meaning |
+|---|---|
+| `VERIFIED` | The verifier confirmed the real state matches the policy |
+| `FAILED_VERIFICATION` | The correct state was not reached; never reported as success |
+| `NEEDS_HUMAN` | Essential information was missing and no usable answer was given |
+| `REJECTED_BY_HUMAN` | A protected action was declined; nothing was changed |
 
-<h3>Phase 4: Deterministic Policy Gate</h3>
-<p>
-In <code>agent/policy.py</code>, I built a pre-execution security gate. If an incoming request asks for permissions outside the defined role boundaries, the policy gate strips those requests before any tool can be executed. Sensitive actions automatically trigger an interactive confirmation prompt in the terminal.
-</p>
+---
 
-<h3>Phase 5: Idempotent Execution and Fault Tolerance</h3>
-<p>
-In <code>agent/executor.py</code>, I engineered resilient tool dispatching. When creating users, the tool checks whether the account already exists. If a network connection drops after account creation, the subsequent retry returns an existing status cleanly without producing duplicate accounts. Transient network errors (HTTP 5xx, socket timeouts) trigger automated exponential backoff retries. Every action is recorded in a persistent SQLite audit log.
-</p>
+## 4. Implementation Workflow
 
-<h3>Phase 6: Independent Ground-Truth Verifier</h3>
-<p>
-In <code>verify/verifier.py</code>, I implemented an autonomous verification suite containing zero AI dependencies. The verifier checks positive team and channel membership, proves negative non-membership across all unauthorized channels and repositories, and conducts an active authentication test to prove the credentials work (or in offboarding, confirms that login is strictly blocked).
-</p>
+1. **Infrastructure.** Mattermost (port 8065) and Gitea (port 3000) run in Docker Compose, so the agent works against real open-source applications over authenticated REST calls.
+2. **Policy.** `config/roles.yaml` lists the resources each role may access (a designer gets only the `design` channel and the `ui-kit` repository) and which resources are sensitive. Everything else is denied by default.
+3. **Application clients.** `tools/apps.py` holds the REST clients for both apps. Secrets stay in a git-ignored `.env`; `.env.example` is the template.
+4. **Policy gate.** `agent/policy.py` refuses out-of-policy requests and blocks tool calls for the wrong person, unapproved channels or repositories, wrong task type, or unapproved offboarding.
+5. **Idempotent, fault-tolerant execution.** Create tools check for an existing account by email first, so a retry after a dropped connection never creates a duplicate. `agent/executor.py` logs each action to SQLite before running it, retries transient failures (HTTP 5xx, timeouts) a bounded number of times with increasing delays, and includes a fault injector for testing.
+6. **Independent verifier.** `verify/verifier.py` checks that accounts exist and are active, that membership is correct, that access is **absent** for every unauthorized channel and repository, and that login works (or, when offboarding, is refused). Offboarding a person who has no account is reported as a failure.
+7. **Model integration.** `agent/llm.py` is a provider-agnostic adapter (Gemini through an OpenAI-compatible endpoint, Claude, a deterministic mock for tests). I found and fixed a protocol incompatibility: multi-turn assistant tool calls must preserve Gemini's internal `thought_signature` attribute.
+8. **Benchmark.** `scripts/evaluate.py` runs eight scenarios against the live apps and saves results to `reports/evaluation_results.json`: designer onboarding; developer onboarding; sensitive access approved; sensitive access denied; fault recovery and idempotency; prompt-injection resistance; negative offboarding (nonexistent user); and false-success / silent-failure detection.
 
-<h3>Phase 7: Frontier Model Integration</h3>
-<p>
-I integrated Google Gemini (<code>gemini-3.5-flash-lite</code>) through an OpenAI-compatible adapter in <code>agent/llm.py</code>. During testing, I identified and resolved an API protocol incompatibility where multi-turn assistant tool calls required preserving Gemini's internal cryptographic <code>thought_signature</code> attribute.
-</p>
+---
 
-<h3>Phase 8: Systematic Benchmark Evaluation</h3>
-<p>
-I developed an evaluation harness in <code>scripts/evaluate.py</code> to empirically test the system across eight diverse scenarios: role-based onboarding, sensitive access approval, sensitive access denial, injected network faults, prompt injection resistance, nonexistent user offboarding, and silent write failure detection.
-</p>
+## 5. Evaluation and Results
 
-<hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+### 5.1 Autonomous onboarding
 
-<h2>4. Evaluation Results and Empirical Evidence</h2>
+Onboarding of Maya Lin as a designer: the agent parsed the sentence, created the accounts, granted only the approved resources, and passed all 12 independent verification checks in 15.27 seconds.
 
-<h3>A. Single Employee Autonomous Onboarding</h3>
-<p>
-Below is the terminal execution output demonstrating the autonomous onboarding of Maya Lin as a designer. The agent parsed the natural language sentence, created the accounts, assigned only the approved resources, and passed all 12 independent ground-truth verification checks in 15.27 seconds.
-</p>
+![Autonomous onboarding terminal output](screenshots/onboarding_verified.png)
 
-<div align="center" style="margin: 20px 0;">
-  <img src="screenshots/onboarding_verified.png" alt="Autonomous Onboarding Terminal Execution" style="max-width: 100%; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-</div>
+### 5.2 Benchmark suite
 
-<h3>B. Complete Benchmark Reliability Suite</h3>
-<p>
-To demonstrate statistical robustness, I executed the full eight-scenario benchmark suite against live local applications. Below is the unedited terminal output showing the completion of all evaluation passes.
-</p>
+The eight-scenario benchmark (one run per scenario) ran against the live local apps with `gemini-3.5-flash-lite` through the OpenAI-compatible provider.
 
-<div align="center" style="margin: 20px 0;">
-  <img src="screenshots/evaluation_results.png" alt="Empirical Benchmark Evaluation Execution" style="max-width: 100%; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-</div>
+![Benchmark evaluation output](screenshots/evaluation_results.png)
 
-<h3>C. Summary of Performance Metrics</h3>
+### 5.3 Metrics
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 15px; border: 1px solid #bbb;">
-  <thead>
-    <tr style="background-color: #f2f2f2; text-align: left;">
-      <th style="padding: 10px 14px; border: 1px solid #bbb;">Evaluated Metric</th>
-      <th style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Measured Result</th>
-      <th style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Target Benchmark</th>
-      <th style="padding: 10px 14px; border: 1px solid #bbb;">Engineering Significance</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Verified Completion Rate</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center; font-weight: bold;">100.0%</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Maximize</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Proportion of valid tasks confirmed by ground-truth checks</td>
-    </tr>
-    <tr style="background-color: #fafafa;">
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">False-Completion Rate</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center; font-weight: bold;">0.0%</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">0.0%</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Zero false successes reported during simulated drops</td>
-    </tr>
-    <tr>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Duplicate Account Creation</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center; font-weight: bold;">0</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">0</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Proves idempotency across network failure recoveries</td>
-    </tr>
-    <tr style="background-color: #fafafa;">
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Fault Recovery Rate</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center; font-weight: bold;">100.0%</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Maximize</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Tasks that recovered smoothly from injected timeouts</td>
-    </tr>
-    <tr>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Unauthorized Access Grants</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center; font-weight: bold;">0</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">0</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Prompt injections and unapproved grants successfully blocked</td>
-    </tr>
-    <tr style="background-color: #fafafa;">
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Average Execution Latency</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">39.46s</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Report</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Mean runtime per complete autonomous execution</td>
-    </tr>
-    <tr>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Average Tool Calls per Task</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">7.12</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb; text-align: center;">Report</td>
-      <td style="padding: 10px 14px; border: 1px solid #bbb;">Total API calls dispatched including retry attempts</td>
-    </tr>
-  </tbody>
-</table>
+| Metric | Result | Target | Definition |
+|---|---:|---:|---|
+| Scenarios evaluated | 8 | Report | 8 distinct scenarios, 1 run each |
+| Verified completion rate | 100.0% | Maximize | Tasks expected to succeed that passed independent verification |
+| False-completion rate | 0.0% | 0.0% | Tasks marked verified despite unsupported or missing state |
+| Duplicate account count | 0 | 0 | Extra accounts created during retries and fault recovery |
+| Fault recovery rate | 100.0% | Maximize | Tasks recovering from injected timeouts (`fail_after_once`) |
+| Unauthorized access grants | 0 | 0 | Sensitive or admin access granted without policy approval |
+| Average latency | 39.46 s | Report | Mean runtime per task (median 44.05 s) |
+| Average tool calls per task | 7.12 | Report | Mean tool invocations, including retries |
 
-<hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+Scenarios 6 and 7 are negative tests that end in `FAILED_VERIFICATION` by design: they show the system refuses to claim success for a nonexistent user or a write that did not persist. The sample is small (eight scenarios, one run each, one machine, one model), so the figures indicate behavior but are not statistical guarantees.
 
-<h2>5. System Architecture and File Structure</h2>
+### 5.4 Unit tests
 
-<p>
-The codebase is structured into clear, single-responsibility modules:
-</p>
+`tests/test_agent.py` has 14 tests that run in about a second against in-memory fake apps and a mock model. They cover successful onboarding, missing role, username conflict, timeout after a successful write (no duplicate), retry after an early error, silent write failure caught by the verifier, an injected "make her admin" request, sensitive access approved and denied, offboarding approved and rejected, an unknown person, and the policy gate blocking out-of-policy calls.
 
-<ul>
-  <li><b>config/roles.yaml:</b> Declarative specification of organizational roles and permitted channels/repositories.</li>
-  <li><b>agent/runtime.py:</b> The central execution loop orchestrating intent parsing, tool selection, and verification calls.</li>
-  <li><b>agent/policy.py:</b> Pure Python policy engine enforcing role boundaries and intercepting sensitive actions for human approval.</li>
-  <li><b>agent/executor.py:</b> Tool dispatcher handling transient failure classification, exponential backoff, and SQLite audit logging.</li>
-  <li><b>agent/llm.py:</b> Provider-agnostic adapter supporting Gemini, OpenAI, Claude, and local mock testing backends.</li>
-  <li><b>tools/apps.py:</b> Concrete REST API client implementations for Mattermost (port 8065) and Gitea (port 3000).</li>
-  <li><b>tools/registry.py:</b> Pydantic schemas exposing typed tool parameters to the language model.</li>
-  <li><b>verify/verifier.py:</b> Independent verification suite checking positive access, negative access, and live login state.</li>
-  <li><b>scripts/evaluate.py:</b> Automated eight-scenario benchmark runner.</li>
-  <li><b>scripts/seed.py:</b> Environment initialization script populating baseline company teams, repos, and accounts.</li>
-  <li><b>scripts/check_setup.py:</b> Diagnostic script verifying that all ten container and API endpoints are reachable.</li>
-  <li><b>tests/test_agent.py:</b> Fourteen unit test cases evaluating logic against in-memory mock applications.</li>
-</ul>
+---
 
-<hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;">
+## 6. Repository Structure
 
-<h2>6. Instructions for Running the System</h2>
+```
+dayone-agent/
+├── config/roles.yaml        Roles, managed resources, sensitive resources
+├── agent/
+│   ├── runtime.py           Central loop: intent, approvals, execution, verification, report
+│   ├── policy.py            Role boundaries, approval rules, tool-call gate
+│   ├── executor.py          Gate, retries, fault injection, audit logging
+│   ├── llm.py               Model adapters: Gemini/OpenAI-compatible, Claude, mock
+│   └── state.py, models.py, config.py, errors.py, reporting.py, factory.py
+├── tools/
+│   ├── apps.py              REST clients for Mattermost and Gitea
+│   └── registry.py          Tool definitions and parameter schemas
+├── verify/verifier.py       Independent verification (no AI)
+├── scripts/                 seed.py, check_setup.py, evaluate.py
+├── tests/                   fakes.py, test_agent.py (14 tests)
+├── docker/docker-compose.yml
+├── screenshots/             Images used in this README
+├── run.py                   Command-line entry point
+└── .env.example, requirements.txt
+```
 
-<p>
-To run and test the complete system locally, follow these steps:
-</p>
+---
 
-<h3>Step 1: Clone and Set Up the Python Environment</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
-git clone https://github.com/&lt;your-username&gt;/dayone-agent.git
+## 7. Setup and Usage
+
+**Prerequisites:** Python 3.11+, Docker Desktop (WSL 2 on Windows), and a model API key (the mock model needs none).
+
+```powershell
+# 1. Clone and create the environment
+git clone https://github.com/<your-username>/dayone-agent.git
 cd dayone-agent
-
 python -m venv venv
-venv\Scripts\activate
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-</pre>
 
-<h3>Step 2: Start Local Containers</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
+# 2. Start Mattermost (http://localhost:8065) and Gitea (http://localhost:3000)
 docker compose -f docker/docker-compose.yml up -d
-</pre>
 
-<h3>Step 3: Configure Environment Variables</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
-copy .env.example .env
-</pre>
-<p>
-Generate a Gitea administrator access token using the Docker CLI, then add the token and your model API key to <code>.env</code>.
-</p>
+# 3. Configure settings
+copy .env.example .env         # macOS/Linux: cp .env.example .env
+```
 
-<h3>Step 4: Seed Applications and Test Connections</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
+Create the Gitea administrator and token, then put the token in `GITEA_TOKEN` in `.env` and set the model variables (`LLM_PROVIDER`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`). Never commit `.env`.
+
+```powershell
+docker exec -u git dayone-gitea gitea admin user create --admin --username dayone-admin --password "Admin-Pass-12345!" --email admin@example.test --must-change-password=false
+docker exec -u git dayone-gitea gitea admin user generate-access-token --username dayone-admin --token-name dayone --scopes all
+```
+
+```powershell
+# 4. Seed the apps and test every connection
 python -m scripts.seed
 python -m scripts.check_setup
-</pre>
 
-<h3>Step 5: Execute the Agent</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
-# Autonomous onboarding:
+# 5. Run the agent
 python run.py "Priya Sharma joins Monday as a designer"
-
-# Interactive offboarding:
-python run.py "Rahul Verma left today"
-
-# Fault injection and idempotent recovery:
+python run.py "Rahul Verma left today"        # asks for approval
 python run.py "Aarav Patel joins Monday as a developer" --faults mm_create_user=fail_after_once
-</pre>
 
-<h3>Step 6: Run Unit Tests and Benchmark Suite</h3>
-<pre style="background: #f7f7f7; border: 1px solid #ddd; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 14px;">
-# Unit test suite (14 mock tests in under 1 second):
+# 6. Tests and benchmark
 python -m pytest tests/ -v
-
-# 8-scenario live benchmark evaluation:
 python -m scripts.evaluate
-</pre>
+```
 
-<hr style="border: none; border-top: 1px solid #ccc; margin: 30px 0 15px 0;">
+If `seed` cannot create the Mattermost administrator, open http://localhost:8065, sign up with the email and password from `.env`, and run it again. Each run prints the actions, the PASS/FAIL checks and the final status, and saves a JSON report in `reports/`.
 
-<p align="center" style="font-size: 14px; color: #777;">
-  Project repository submitted as part of the technical evaluation for autonomous agent engineering.
-</p>
+---
 
-</div>
+## 8. Technologies and Tools
+
+- **AI Coding Tools & Assistants:** Antigravity IDE (used as an AI pair-programmer for scaffolding boilerplate, syntax generation, and API protocol debugging).
+- **LLM Runtime Models:** Google Gemini (`gemini-3.5-flash-lite`) via OpenAI-compatible endpoints.
+- **Libraries & Frameworks:** Python 3.12, `pydantic` (schema validation), `httpx` (REST clients), `pyyaml`, `pytest`.
+- **Infrastructure:** Docker Desktop (self-hosted local Mattermost & Gitea containers).
+- **Data:** All data is synthetic. No real credentials, company data, or third-party systems are used.
+
+---
+
+## 9. Key Design Decisions
+
+- **Policy in code, not in the prompt.** A prompt can be argued with; a gate cannot. No admin-granting tool exists.
+- **The verifier decides the status.** The agent's own summary is shown for context but never used to decide success.
+- **Idempotent tools keyed on email.** Checking before creating makes retries safe when a call succeeds on the server but times out for the client.
+- **Verify absence as well as presence.** Most access problems are people having too much access, so every governed channel and repository is checked.
+- **Audit log before action, one bounded repair round.** A failure mid-action leaves a trace, and a failed verification gets one more attempt before the task is reported as failed.
+- **No agent framework.** A short, readable loop is easier to test, debug and explain.
+
+---
+
+## 10. Assumptions
+
+- One Mattermost team and a fixed set of managed channels and repositories, defined in `config/roles.yaml`.
+- An email of the form `first.last@<domain>` uniquely identifies a person.
+- Offboarding means deactivating accounts and removing repository access, not deleting data.
+- Demo accounts share one synthetic password; real deployments would use single sign-on.
+
+---
+
+## 11. Known Limitations
+
+- The benchmark is a small sample (eight scenarios, one run each); the metrics are indicative, not statistically conclusive.
+- Display names are not independently verified. In the onboarding run above, the audit log shows an incomplete last name passed to Mattermost and a first-name-only full name passed to Gitea; the verifier checks accounts, access and login, so it did not flag this.
+- The verifier shares client code with the tools, so a bug in a client method could affect both.
+- No crash recovery: an interrupted task is not resumed automatically.
+- Only two applications and three roles, through REST APIs; there is no browser (UI) fallback.
+- Mattermost runs from its all-in-one test image, and approval is a terminal prompt without user identities.
+- Latency (about 39 seconds per task) is dominated by model calls and has not been optimized.
