@@ -23,6 +23,7 @@ def main():
         faults=parse_faults(args.faults) if args.faults is not None else None,
         approve=(lambda d: True) if args.auto_approve else None,
     )
+    print(f"\n[agent] Processing: \"{args.request}\" ...")
     report = runtime.run(args.request)
     print(render(report))
     print("Saved:", save(report))
